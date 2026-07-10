@@ -5,7 +5,10 @@ import json
 import sys
 from pathlib import Path
 
+from logger import AppLogger
 from reel_core import download_reel, extract_shortcode, find_existing
+
+log = AppLogger("main")
 
 
 def main() -> None:
@@ -22,15 +25,23 @@ def main() -> None:
         default=None,
         help="Path to config JSON (default: config.json next to main.py)",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-download even if cached",
+    )
     args = parser.parse_args()
 
     shortcode = extract_shortcode(args.shortcode)
     output_dir = Path(args.dir)
     config_path = Path(args.config) if args.config else None
 
-    cached = find_existing(shortcode, output_dir)
+    log.info(f"CLI download: {shortcode}")
+
+    cached = find_existing(shortcode, output_dir) if not args.force else None
     if cached:
         meta = cached
+        log.info(f"Loaded from cache: {shortcode}")
         print(json.dumps(meta, indent=2))
         print(f"\nLoaded from cache: {output_dir / shortcode}/", file=sys.stderr)
         return

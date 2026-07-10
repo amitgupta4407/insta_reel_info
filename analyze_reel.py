@@ -6,7 +6,10 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+from logger import AppLogger
 from reel_core import download_reel, extract_shortcode, find_existing, get_video_path
+
+log = AppLogger("analyze_reel")
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
 
@@ -101,8 +104,10 @@ def main() -> None:
     cached_data = find_existing(shortcode, output_dir) if not args.force else None
 
     if cached_data:
+        log.info(f"Using cached: {shortcode}")
         summarize(cached_data, output_dir, cached=True)
     else:
+        log.info(f"Analyzing reel: {shortcode}")
         meta = download_reel(
             shortcode,
             output_dir,

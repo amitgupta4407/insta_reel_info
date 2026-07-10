@@ -5,9 +5,24 @@ from pathlib import Path
 
 import streamlit as st
 
-from reel_core import download_reel, extract_shortcode, get_video_path
+from logger import AppLogger
+from reel_core import download_reel, extract_shortcode, find_existing, get_video_path
+
+log = AppLogger("app")
 
 DEFAULT_DIR = str((Path(__file__).parent / "downloads").resolve())
+
+
+def get_thumbnail_path(meta: dict, output_dir: Path) -> Path | None:
+    local = meta.get("thumbnail_local")
+    if local and Path(local).exists():
+        return Path(local)
+    sc = meta.get("shortcode")
+    if sc:
+        p = output_dir / sc / f"{sc}_thumb.jpg"
+        if p.exists():
+            return p
+    return None
 
 
 def list_downloads(output_dir: Path) -> list[dict]:
@@ -39,6 +54,15 @@ def main():
     show_comments = st.sidebar.checkbox("Show top comments", value=True)
     show_transcript = st.sidebar.checkbox("Show transcript", value=True)
     show_json = st.sidebar.checkbox("Show JSON", value=True)
+
+    def _on_gallery_toggle():
+        if st.session_state.get("_gallery_cb"):
+            st.session_state.selected = None
+
+    gallery_view = st.sidebar.checkbox(
+        "Gallery view (thumbnails)", value=False, on_change=_on_gallery_toggle,
+        key="_gallery_cb",
+    )
     st.sidebar.divider()
 
     downloads = list_downloads(output_dir)
@@ -72,17 +96,28 @@ def main():
             st.sidebar.error(str(e))
             sc = None
         if sc:
-            with st.spinner("Downloading..."):
-                download_reel(sc, output_dir, transcript=show_transcript)
-            st.session_state.selected = sc
-            st.rerun()
+            cached = find_existing(sc, output_dir)
+            if cached:
+                log.info(f"UI cache hit: {sc}")
+                st.session_state.selected = sc
+                st.rerun()
+            else:
+                log.info(f"UI download: {sc}")
+                try:
+                    with st.spinner("Downloading..."):
+                        download_reel(sc, output_dir, transcript=show_transcript)
+                    st.session_state.selected = sc
+                    st.rerun()
+                except Exception as e:
+                    log.error(f"Download failed: {sc}: {e}")
+                    st.sidebar.error(f"Download failed: {e}")
 
     # Pick from history
-    if downloads and not st.session_state.selected:
+    if downloads and not st.session_state.selected and not gallery_view:
         options = list(shortcode_map.keys())
         chosen = st.sidebar.selectbox("Select a reel", options, index=0)
         st.session_state.selected = shortcode_map[chosen]
-    elif st.session_state.selected:
+    elif st.session_state.selected and not gallery_view:
         # Show selectbox at current selection
         current = st.session_state.selected
         options = list(shortcode_map.keys())
@@ -92,9 +127,37 @@ def main():
         st.session_state.selected = shortcode_map[chosen]
 
     selected = st.session_state.selected
-    if not selected and downloads:
+    if not selected and downloads and not gallery_view:
         selected = downloads[0]["shortcode"]
         st.session_state.selected = selected
+
+    # Gallery view — only when browsing, not when viewing a reel
+    if gallery_view and downloads and not selected:
+        st.subheader(f"Gallery ({len(downloads)} reels)")
+        cols_per_row = 4
+        for i in range(0, len(downloads), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for j, col in enumerate(cols):
+                idx = i + j
+                if idx >= len(downloads):
+                    break
+                entry = downloads[idx]
+                m = entry["meta"]
+                sc = entry["shortcode"]
+                thumb_path = get_thumbnail_path(m, output_dir)
+                with col:
+                    if thumb_path:
+                        st.image(str(thumb_path), use_container_width=True)
+                    elif m.get("thumbnail"):
+                        st.image(m["thumbnail"], use_container_width=True)
+                    else:
+                        st.text("No thumbnail")
+                    st.caption(f"@{m.get('owner_username', '?')}")
+                    st.caption(f"{m.get('likes', 0)} likes | {m.get('comments', 0)} comments")
+                    if st.button("View", key=f"view_{sc}", use_container_width=True):
+                        st.session_state.selected = sc
+                        st.rerun()
+        return
 
     if not selected:
         st.info("No downloads yet. Enter a URL in the sidebar and click Download.")
@@ -116,8 +179,12 @@ def main():
         if video_path and video_path.exists():
             st.subheader("Video")
             st.video(str(video_path))
-        elif meta.get("thumbnail"):
-            st.image(meta["thumbnail"], use_container_width=True)
+        else:
+            thumb_path = get_thumbnail_path(meta, output_dir)
+            if thumb_path:
+                st.image(str(thumb_path), use_container_width=True)
+            elif meta.get("thumbnail"):
+                st.image(meta["thumbnail"], use_container_width=True)
 
         # Files
         folder = output_dir / selected

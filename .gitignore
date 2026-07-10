@@ -17,3 +17,7 @@ downloads/
 
 # Config
 /config.json
+/config.yaml
+
+# Logs
+/logs/

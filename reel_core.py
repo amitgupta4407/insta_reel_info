@@ -4,10 +4,15 @@ import json
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from yt_dlp import YoutubeDL
+
+from logger import AppLogger
+
+log = AppLogger("reel_core")
 
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
@@ -67,6 +72,8 @@ def download_reel(
     config_path: Path | None = None,
     transcript: bool = True,
 ) -> dict:
+    log.info(f"Downloading reel: {shortcode}")
+    start = time.time()
     url = f"https://www.instagram.com/reel/{shortcode}/"
     out_dir = output_dir / shortcode
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -110,7 +117,7 @@ def download_reel(
         ).isoformat(),
         "hashtags": re.findall(r"#\w+", caption),
         "mentions": re.findall(r"@\w+", caption),
-        "duration": info.get("duration"),
+        "duration": info.get("duration") or (info.get("requested_downloads") or [{}])[0].get("duration"),
         "thumbnail": info.get("thumbnail"),
         "filename": f"{shortcode}.{ext}",
     }
@@ -125,6 +132,7 @@ def download_reel(
         if ffmpeg_exe and video_file.exists():
             temp_wav = out_dir / f"{shortcode}_audio.wav"
             try:
+                log.info(f"Transcribing audio: {shortcode}")
                 subprocess.run(
                     [str(ffmpeg_exe), "-y", "-i", str(video_file),
                      "-vn", "-acodec", "pcm_s16le", "-ar", "16000",
@@ -135,9 +143,9 @@ def download_reel(
                     result = transcribe_audio(temp_wav, whisper_model)
                     meta["transcript"] = result["text"]
                     meta["transcript_segments"] = result["segments"]
+                    log.info(f"Transcription done: {shortcode} ({len(result['text'])} chars)")
             except Exception as exc:
-                if not quiet:
-                    print(f"[whisper] {exc}", file=sys.stderr)
+                log.error(f"Transcription failed: {shortcode}: {exc}")
             finally:
                 if temp_wav.exists():
                     temp_wav.unlink()
@@ -147,6 +155,19 @@ def download_reel(
     json_path = out_dir / f"{shortcode}.json"
     json_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
+    thumb_url = meta.get("thumbnail")
+    if thumb_url:
+        thumb_path = out_dir / f"{shortcode}_thumb.jpg"
+        try:
+            import urllib.request
+            urllib.request.urlretrieve(thumb_url, str(thumb_path))
+            meta["thumbnail_local"] = str(thumb_path)
+            json_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        except Exception:
+            meta["thumbnail_local"] = None
+
+    elapsed = time.time() - start
+    log.log_timing(f"download_reel({shortcode})", elapsed)
     return meta
 
 
